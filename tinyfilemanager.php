@@ -1,11 +1,10 @@
 <?php
 //Default Configuration
-$CONFIG = '{"lang":"en","error_reporting":true,"show_hidden":true,"hide_cols":false,"calc_folder":false,"theme":"dark"}';
+$CONFIG = '{"lang":"en","error_reporting":true,"show_hidden":true,"hide_cols":false,"calc_folder":true,"theme":"dark"}';
 
 /**
- * H3K | Tiny File Manager V2.4.6
- * CCP Programmers | ccpprogrammers@gmail.com
- * https://tinyfilemanager.github.io
+ * MFM | Micro File Manager V1.0.0
+ * zx | ZXSoftworks
  */
 
 //TFM version
@@ -14,12 +13,11 @@ define('VERSION', '1.0.0');
 //Application Title
 define('APP_TITLE', 'MFM');
 
-// --- EDIT BELOW CONFIGURATION CAREFULLY ---
 
 // Auth with login/password
 // set true/false to enable/disable it
 // Is independent from IP white- and blacklisting
-$use_auth = false;
+$use_auth = true;
 
 // Login user name and password
 // Users: array('Username' => 'Password', 'Username2' => 'Password2', ...)
@@ -40,7 +38,7 @@ $use_highlightjs = true;
 
 // highlight.js style
 // for dark theme use 'ir-black'
-$highlightjs_style = 'vs';
+$highlightjs_style = 'ir-black';
 
 // Enable ace.js (https://ace.c9.io/) on view's page
 $edit_files = true;
@@ -841,9 +839,50 @@ if (isset($_GET['dl'])) {
     if (FM_PATH != '') {
         $path .= '/' . FM_PATH;
     }
+
     if ($dl != '' && is_file($path . '/' . $dl)) {
-        fm_download_file($path . '/' . $dl, $dl, 1024);
+        $bufferSize = 2097152;
+        $filesize = filesize($path . '/' . $dl);
+        $offset = 0;
+        $length = $filesize;
+        if (isset($_SERVER['HTTP_RANGE'])) {
+            // if the HTTP_RANGE header is set we're dealing with partial content
+            // find the requested range
+            // this might be too simplistic, apparently the client can request
+            // multiple ranges, which can become pretty complex, so ignore it for now
+            preg_match('/bytes=(\d+)-(\d+)?/', $_SERVER['HTTP_RANGE'], $matches);
+            $offset = intval($matches[1]);    
+            if(!isset($matches[2])) { $end=$filesize-1; } else { $end = intval($matches[2]); }
+            $length = $end + 1 - $offset;
+            // output the right headers for partial content
+            header('HTTP/1.1 206 Partial Content');
+            header("Content-Range: bytes $offset-$end/$filesize");
+        }
+        // output the regular HTTP headers
+        header('Content-Description: File Transfer');
+        header('Content-Type: ' . mime_content_type($path . '/' . $dl));
+        header('Content-Disposition: attachment; filename="' . basename($path . '/' . $dl) . '"');
+        header('Content-Transfer-Encoding: binary');
+        header('Connection: Keep-Alive');
+        header('Expires: 0');
+        header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
+        header('Pragma: public');
+        header("Content-Length: $filesize");
+        header('Accept-Ranges: bytes');
+
+        $file = fopen($path . '/' . $dl, 'r');
+        // seek to the requested offset, this is 0 if it's not a partial content request
+        fseek($file, $offset);
+        // don't forget to send the data too
+        while ($length >= $bufferSize)
+        {
+            print(fread($file, $bufferSize));
+            $length -= $bufferSize;
+        }
+        if ($length) print(fread($file, $length));
+        fclose($file);
         exit;
+
     } else {
         fm_set_msg(lng('File not found'), 'error');
         fm_redirect(FM_SELF_URL . '?p=' . urlencode(FM_PATH));
@@ -2993,6 +3032,12 @@ function fm_download_file($fileLocation, $fileName, $chunkSize  = 1024)
     if (connection_status() != 0)
         return (false);
     $extension = pathinfo($fileName, PATHINFO_EXTENSION);
+
+    /*
+    * Write the session to the disk and close it here, it's no longer needed
+    * This also allows the user to keep browsing the file share in another tab/window during download
+    */
+    session_write_close();
 
     $contentType = fm_get_file_mimes($extension);
     header("Cache-Control: public");
